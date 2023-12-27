@@ -1,118 +1,166 @@
 package com.geekbrains.task8;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Scanner;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.*;
+import java.util.concurrent.*;
 
 
 public class Task8 {
 
-    public class Main {
-        public static List<Task> taskList = new ArrayList<>();
-        public void main(String[] args) {
-            ExecutorService executorService = Executors.newFixedThreadPool(2);
-            Scanner scanner = new Scanner(System.in);
-            int counter;
-            boolean running = true;
-            while(running) {
-                System.out.println("Выберите пункт меню:\n1. Добавить задачу\n2. Удалить задачу\n3. Вывести задачи и их статус\n4. Завершение работы");
-                counter = scanner.nextInt();
-                switch (counter) {
-                    case (1): {
-                        System.out.print("Введите название задачи: ");
-                        String scan = scanner.next();
-                        Task task = new Task(scan);
-                        taskList.add(task);
-                        executorService.submit(task :: executeTask);
-                        break;
-                    }
-                    case(2): {
-                        System.out.print("Введите название задачи: ");
-                        String scan = scanner.next();
-                        String taskName = new String(scan);
-                        Task newTask = new Task(taskName);
-                        if(Arrays.asList(taskList).contains(newTask)) {
-                            taskList.remove(newTask);
-                        }
-
-                        break;
-                    }
-                    case (3): {
-                        for(int i = 0; i < taskList.size(); i++)
-                        {
-                            taskList.get(i).viewTask();
-                        }
-                        break;
-                    }
-                    case (4): {
-                        running = false;
-                    }
-                }
-            }
-        }
-    }
-
-    class ExecutorSchedulerService {
-        private ExecutorService executorService;
-        private List<Task> taskList = new ArrayList<>();
-        private AtomicBoolean isRunning = new AtomicBoolean(false);
-
-        public ExecutorSchedulerService(int threadPoolSize) {
-            this.executorService = Executors.newFixedThreadPool(threadPoolSize);
-        }
-
-        public void addTask(Task task) {
-            taskList.add(task);
-        }
-
-        public void start() {
-            if (isRunning.compareAndSet(false, true)) {
-                for (Task task : taskList) {
-                    executorService.submit(task::executeTask);
-                }
-            }
-        }
-
-        public void stop() {
-            if (isRunning.compareAndSet(true, false)) {
-                executorService.shutdown();
-            }
-        }
-    }
-
-    class Task {
+    class RobotTask {
         private String name;
-        private String status;
-        //
-        public Task(String name) {
+        private Runnable task;
+        private int priority;
+        private long delaySeconds;
+        private long timeRemaining; // Добавлено поле для хранения времени оставшегося до выполнения
+
+        public RobotTask(String name, Runnable task, int priority, long delaySeconds) {
             this.name = name;
-            this.status = "Не выполняется";
+            this.task = task;
+            this.priority = priority;
+            this.delaySeconds = delaySeconds;
+            this.timeRemaining = delaySeconds * 1000; // Изначально устанавливаем полное время задержки
         }
 
         public String getName() {
             return name;
         }
 
-        public void executeTask() {
-            System.out.println("Выполнение задачи: " + name);
-            this.status = "Выполняется";
-            try {
-                Thread.sleep(15000);
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
-            }
-            Task newTask = new Task(name);
-            System.out.println(Main.taskList);
-            System.out.println("Задача выполнена: " + name);
-            this.status = "Выполнен";
+        public Runnable getTask() {
+            return task;
         }
 
-        public void viewTask()
-        {
-            System.out.println("Статус задачи " + name + ": " + status);
+        public int getPriority() {
+            return priority;
+        }
+
+        public long getDelaySeconds() {
+            return delaySeconds;
+        }
+
+        public long getTimeRemaining() {
+            return timeRemaining;
+        }
+
+        public void updateTimeRemaining(long timeElapsed) {
+            this.timeRemaining -= timeElapsed;
         }
     }
 
+    public class RobotTaskManager {
+        private final ScheduledExecutorService executorService = Executors.newScheduledThreadPool(3);
+        private final PriorityQueue<RobotTask> taskQueue = new PriorityQueue<>(Comparator.comparingInt(RobotTask::getPriority));
+        private final List<RobotTask> completedTasks = new ArrayList<>();
+        private final Map<String, ScheduledFuture<?>> taskFutures = new HashMap<>();
+
+        public void addTask(RobotTask robotTask) {
+            taskQueue.add(robotTask);
+            ScheduledFuture<?> future = executorService.schedule(() -> {
+                robotTask.getTask().run();
+                taskQueue.remove(robotTask);
+                completedTasks.add(robotTask);
+                taskFutures.remove(robotTask.getName());
+            }, robotTask.getDelaySeconds(), TimeUnit.SECONDS);
+            taskFutures.put(robotTask.getName(), future);
+            scheduleTaskDisplay(robotTask);
+        }
+
+        private void scheduleTaskDisplay(RobotTask task) {
+            ScheduledFuture<?> future = executorService.scheduleAtFixedRate(() -> {
+                task.updateTimeRemaining(1000); // Обновляем время оставшееся до выполнения каждую секунду
+            }, 0, 1, TimeUnit.SECONDS);
+            taskFutures.put(task.getName() + "_display", future);
+        }
+
+        public void removeTask(String taskName) {
+            taskQueue.removeIf(task -> task.getName().equals(taskName));
+            ScheduledFuture<?> future = taskFutures.remove(taskName);
+            ScheduledFuture<?> displayFuture = taskFutures.remove(taskName + "_display");
+            if (future != null) {
+                future.cancel(true);
+            }
+            if (displayFuture != null) {
+                displayFuture.cancel(true);
+            }
+        }
+
+        public void displayTasks() {
+            System.out.println("Current tasks:");
+            for (RobotTask task : taskQueue) {
+                System.out.println("- " + task.getName() + " (Priority: " + task.getPriority() +
+                        ", Delay: " + task.getDelaySeconds() + " s, Time Remaining: " + task.getTimeRemaining() + " ms)");
+            }
+        }
+
+        public void displayCompletedTasks() {
+            System.out.println("Completed tasks:");
+            for (RobotTask completedTask : completedTasks) {
+                System.out.println("- " + completedTask.getName() + " (Priority: " + completedTask.getPriority() +
+                        ", Delay: " + completedTask.getDelaySeconds() + " s)");
+            }
+        }
+
+        public void shutdown() {
+            executorService.shutdown();
+        }
+
+        public void main(String[] args) {
+            RobotTaskManager taskManager = new RobotTaskManager();
+            Scanner scanner = new Scanner(System.in);
+
+            while (true) {
+                System.out.println("Выберите действие:");
+                System.out.println("1. Добавить задачу");
+                System.out.println("2. Удалить задачу");
+                System.out.println("3. Отобразить текущие задачи");
+                System.out.println("4. Просмотреть выполненные задачи");
+                System.out.println("5. Завершить программу");
+
+                int choice = scanner.nextInt();
+                scanner.nextLine();
+
+                switch (choice) {
+                    case 1:
+                        System.out.print("Введите имя задачи: ");
+                        String taskName = scanner.nextLine();
+                        System.out.print("Введите приоритет задачи: ");
+                        int priority = scanner.nextInt();
+                        System.out.print("Введите задержку перед выполнением задачи в секундах: ");
+                        long delaySeconds = scanner.nextLong();
+                        scanner.nextLine();
+
+                        RobotTask newTask = new RobotTask(taskName, () -> System.out.println("Executing " + taskName), priority, delaySeconds);
+                        taskManager.addTask(newTask);
+                        System.out.println("Задача добавлена!");
+                        break;
+
+                    case 2:
+                        System.out.print("Введите имя задачи для удаления: ");
+                        String taskToRemove = scanner.nextLine();
+                        taskManager.removeTask(taskToRemove);
+                        System.out.println("Задача удалена (если существовала)!");
+                        break;
+
+                    case 3:
+                        taskManager.displayTasks();
+                        break;
+
+                    case 4:
+                        taskManager.displayCompletedTasks();
+                        break;
+
+                    case 5:
+                        taskManager.shutdown();
+                        scanner.close();
+                        System.exit(0);
+
+                    default:
+                        System.out.println("Неверный выбор. Пожалуйста, выберите снова.");
+                        break;
+                }
+            }
+        }
+    }
 }
+
+
